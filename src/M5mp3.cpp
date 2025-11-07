@@ -80,6 +80,16 @@ int bri = 2;              // brightness index 0..4
 int brightness[5] = {60, 120, 180, 220, 255};
 bool stoped = false;      // spelling kept from original code
 bool isPlaying = true;
+bool screenOff = false;   // 屏幕是否关闭
+int savedBrightness = 2;  // 熄屏前保存的亮度值
+int batteryPercent = 0;   // 缓存的电量百分比
+unsigned long lastBatteryUpdate = 0;  // 上次更新电量的时间
+const unsigned long BATTERY_UPDATE_INTERVAL = 30000;  // 电量更新间隔（毫秒）
+String cachedTimeStr = "";  // 缓存的时间字符串
+unsigned long lastTimeUpdate = 0;  // 上次更新时间的时间
+const unsigned long TIME_UPDATE_INTERVAL = 1000;  // 时间更新间隔（毫秒）
+unsigned long lastGraphUpdate = 0;  // 上次更新频谱图的时间
+const unsigned long GRAPH_UPDATE_INTERVAL = 200;  // 频谱图更新间隔（毫秒）
 bool volUp = false;
 int n = 0;                // current file index
 int nextS = 0;            // request to switch tracks
@@ -479,16 +489,18 @@ void setup() {
   // It can take over the I2S peripheral and conflict with ESP32-audioI2S.
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(brightness[bri]);
+  // 启用 UTF-8 支持以显示中文
+  M5Cardputer.Display.setAttribute(utf8_switch, true);
   sprite.createSprite(240, 135);
   spr.createSprite(86, 16);
   SPI.begin(SD_SCK, SD_MISO, SD_MOSI);
   if (!SD.begin(SD_CS)) {
     Serial.println(F("ERROR: SD Mount Failed!"));
   }
-  // Prefer MP3s in /mp3s folder. If none found, fall back to root.
-  listFiles(SD, "/mp3s", MAX_FILES);
+  // 从 /music 目录读取歌曲文件
+  listFiles(SD, "/music", MAX_FILES);
   if (fileCount == 0) {
-    Serial.println("No files found in /mp3s, scanning root");
+    Serial.println("No files found in /music, scanning root as fallback");
     listFiles(SD, "/", MAX_FILES);
   }
   if (!initCardputerAudio()) {
@@ -534,6 +546,13 @@ void setup() {
     grays[i] = M5Cardputer.Display.color565(co, co, co + 40);
     co = co - 13;
   }
+  // 初始化电量显示和时间缓存
+  batteryPercent = getBatteryPercent();
+  lastBatteryUpdate = millis();
+  cachedTimeStr = rtc.getTime().substring(3, 8);
+  lastTimeUpdate = millis();
+  lastGraphUpdate = millis();
+  
   // Create tasks and pin them to different cores
   xTaskCreatePinnedToCore(Task_TFT, "Task_TFT", 20480, NULL, 2, NULL, 0);                  // Core 0
   xTaskCreatePinnedToCore(Task_Audio, "Task_Audio", 10240, NULL, 3, &handleAudioTask, 1);  // Core 1
@@ -555,7 +574,7 @@ void loop() {
       }
     }
   }
-  delay(100);
+  delay(200);  // 增加轮询间隔，降低CPU使用率
 }
 void draw() {
   if (graphSpeed == 0) {
@@ -611,31 +630,40 @@ void draw() {
     //BATTERY
     sprite.drawRect(206, 119, 28, 12, GREEN);
     sprite.fillRect(234, 122, 3, 6, GREEN);
-    //graph
-    for (int i = 0; i < 14; i++) {
-      if (!stoped)
+    //graph - 降低频谱图更新频率以节省CPU
+    unsigned long now = millis();
+    if (!stoped && (now - lastGraphUpdate >= GRAPH_UPDATE_INTERVAL)) {
+      for (int i = 0; i < 14; i++) {
         g[i] = random(1, 5);
+      }
+      lastGraphUpdate = now;
+    }
+    for (int i = 0; i < 14; i++) {
       for (int j = 0; j < g[i]; j++)
         sprite.fillRect(172 + (i * 4), 50 - j * 3, 3, 2, grays[4]);
     }
-    sprite.setTextFont(0);
+    // 设置中文字体，行高改为 16 像素以适配中文显示
+    sprite.setFont(&fonts::efontCN_12);
     sprite.setTextDatum(0);
-    if (n < 5)
-      for (int i = 0; i < 10; i++) {
+    // 显示 7 行（行高 16 像素）
+    if (n < 3)
+      for (int i = 0; i < 7; i++) {
         if (i == n) sprite.setTextColor(WHITE, BLACK);
         else sprite.setTextColor(GREEN, BLACK);
         if (i < fileCount)
-          sprite.drawString(audioFiles[i].substring(1, 20), 8, 10 + (i * 12));
+          sprite.drawString(audioFiles[i].substring(1, 20), 8, 10 + (i * 16));
       }
     int yos = 0;
-    if (n >= 5)
-      for (int i = n - 5; i < n - 5 + 10; i++) {
+    if (n >= 3)
+      for (int i = n - 3; i < n - 3 + 7; i++) {
         if (i == n) sprite.setTextColor(WHITE, BLACK);
         else sprite.setTextColor(GREEN, BLACK);
         if (i < fileCount)
-          sprite.drawString(audioFiles[i].substring(1, 20), 8, 10 + (yos * 12));
+          sprite.drawString(audioFiles[i].substring(1, 20), 8, 10 + (yos * 16));
         yos++;
       }
+    // 恢复默认字体用于其他文本
+    sprite.setTextFont(0);
     sprite.setTextColor(grays[1], gray);
     sprite.drawString("WINAMP", 150, 4);
     sprite.setTextColor(grays[2], gray);
@@ -658,12 +686,22 @@ void draw() {
     }
     sprite.setTextColor(GREEN, BLACK);
   sprite.setFont(&DSEG7_Classic_Mini_Regular_16);
-    if (!stoped)
-      sprite.drawString(rtc.getTime().substring(3, 8), 172, 18);
+    // 缓存时间字符串，减少字符串操作
+    if (!stoped) {
+      if (now - lastTimeUpdate >= TIME_UPDATE_INTERVAL) {
+        cachedTimeStr = rtc.getTime().substring(3, 8);
+        lastTimeUpdate = now;
+      }
+      sprite.drawString(cachedTimeStr, 172, 18);
+    }
     sprite.setTextFont(0);
-    int percent = getBatteryPercent();
+    // 降低电量刷新率：每 30 秒更新一次，减少 ADC 读取和显示跳动
+    if (now - lastBatteryUpdate >= BATTERY_UPDATE_INTERVAL) {
+      batteryPercent = getBatteryPercent();
+      lastBatteryUpdate = now;
+    }
     sprite.setTextDatum(3);
-    sprite.drawString(String(percent) + "%", 220, 121);
+    sprite.drawString(String(batteryPercent) + "%", 220, 121);
     sprite.setTextColor(BLACK, grays[4]);
     sprite.drawString("B", 220, 96);
     sprite.drawString("N", 198, 96);
@@ -674,10 +712,14 @@ void draw() {
     sprite.drawString("<<", 180, 103);
     spr.fillSprite(BLACK);
     spr.setTextColor(GREEN, BLACK);
-    if (!stoped)
+    if (!stoped) {
+      // 降低文本滚动速度，减少绘制频率
+      if (graphSpeed == 0) {  // 只在每4帧更新一次（配合graphSpeed机制）
+        textPos = textPos - 2;
+        if (textPos < -300) textPos = 90;
+      }
       spr.drawString(audioFiles[n].substring(1, audioFiles[n].length()), textPos, 4);
-    textPos = textPos - 2;
-    if (textPos < -300) textPos = 90;
+    }
     spr.pushSprite(&sprite, 148, 59);
     sprite.pushSprite(0, 0);
   }
@@ -744,9 +786,29 @@ void Task_TFT(void *pvParameters) {
         n = random(0, fileCount);
         nextS = 1;
       }
+      if (M5Cardputer.Keyboard.isKeyPressed('s')) {
+        // 's' 键：熄屏/亮屏切换
+        if (screenOff) {
+          // 亮屏：恢复到熄屏前的亮度
+          screenOff = false;
+          bri = savedBrightness;
+          M5Cardputer.Display.wakeup();
+          M5Cardputer.Display.setBrightness(brightness[bri]);
+          Serial.println("Screen ON - restored brightness");
+        } else {
+          // 熄屏：保存当前亮度并关闭屏幕
+          savedBrightness = bri;
+          screenOff = true;
+          M5Cardputer.Display.sleep();
+          Serial.println("Screen OFF - saved brightness");
+        }
+      }
     }
-    draw();
-    vTaskDelay(40 / portTICK_PERIOD_MS);  // Adjust the delay for responsiveness
+    // 如果屏幕关闭，跳过绘制以节省CPU
+    if (!screenOff) {
+      draw();
+    }
+    vTaskDelay(50 / portTICK_PERIOD_MS);  // 平衡刷新率：50ms (20fps)，既流畅又省电
   }
 }
 void Task_Audio(void *pvParameters) {
