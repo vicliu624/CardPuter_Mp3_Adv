@@ -82,6 +82,7 @@ bool stoped = false;      // spelling kept from original code
 bool isPlaying = true;
 bool screenOff = false;   // 屏幕是否关闭
 int savedBrightness = 2;  // 熄屏前保存的亮度值
+bool showDeleteDialog = false;  // 是否显示删除确认对话框
 int batteryPercent = 0;   // 缓存的电量百分比
 unsigned long lastBatteryUpdate = 0;  // 上次更新电量的时间
 const unsigned long BATTERY_UPDATE_INTERVAL = 30000;  // 电量更新间隔（毫秒）
@@ -91,7 +92,8 @@ const unsigned long TIME_UPDATE_INTERVAL = 1000;  // 时间更新间隔（毫秒
 unsigned long lastGraphUpdate = 0;  // 上次更新频谱图的时间
 const unsigned long GRAPH_UPDATE_INTERVAL = 200;  // 频谱图更新间隔（毫秒）
 bool volUp = false;
-int n = 0;                // current file index
+int n = 0;                // current file index (selected)
+int currentPlayingIndex = 0;  // 实际正在播放的歌曲索引
 int nextS = 0;            // request to switch tracks
 int graphSpeed = 0;
 int g[14] = {0};
@@ -113,6 +115,7 @@ int fileCount = 0;
 void Task_TFT(void *pvParameters);
 void Task_Audio(void *pvParameters);
 void listFiles(fs::FS &fs, const char *dirname, uint8_t levels);
+void deleteCurrentFile();  // 删除当前选中的文件
 void resetClock() {
   rtc.setTime(0, 0, 0, 17, 1, 2021);
 }
@@ -721,6 +724,37 @@ void draw() {
       spr.drawString(audioFiles[n].substring(1, audioFiles[n].length()), textPos, 4);
     }
     spr.pushSprite(&sprite, 148, 59);
+    
+    // 如果显示删除对话框，绘制对话框
+    if (showDeleteDialog) {
+      // 绘制对话框背景和边框（增加高度以容纳中文）
+      sprite.fillRect(20, 40, 200, 70, BLACK);
+      sprite.drawRect(20, 40, 200, 70, WHITE);
+      sprite.setTextFont(0);
+      sprite.setTextColor(WHITE, BLACK);
+      sprite.setTextDatum(0);
+      sprite.drawString("Delete song?", 30, 45);
+      if (n < fileCount) {
+        // 使用和曲名列表一样的中文字体和行高
+        sprite.setFont(&fonts::efontCN_12);
+        String fileName = audioFiles[n];
+        // 提取文件名（去掉路径）
+        int lastSlash = fileName.lastIndexOf('/');
+        if (lastSlash >= 0) {
+          fileName = fileName.substring(lastSlash + 1);
+        }
+        // 截取文件名（最多显示20个字符，和列表一致）
+        if (fileName.length() > 20) {
+          fileName = fileName.substring(0, 20);
+        }
+        // 使用16像素行高，和曲名列表一致
+        sprite.drawString(fileName, 30, 57);
+        // 恢复默认字体用于其他文本
+        sprite.setTextFont(0);
+      }
+      sprite.drawString("Y:Yes  C:Cancel", 30, 75);
+    }
+    
     sprite.pushSprite(0, 0);
   }
   graphSpeed++;
@@ -803,6 +837,25 @@ void Task_TFT(void *pvParameters) {
           Serial.println("Screen OFF - saved brightness");
         }
       }
+      if (M5Cardputer.Keyboard.isKeyPressed('d')) {
+        // 'd' 键：显示删除确认对话框
+        if (!showDeleteDialog && fileCount > 0 && n < fileCount) {
+          showDeleteDialog = true;
+          Serial.printf("Delete dialog shown for: %s\n", audioFiles[n].c_str());
+        }
+      }
+      if (showDeleteDialog) {
+        if (M5Cardputer.Keyboard.isKeyPressed('y')) {
+          // 'y' 键：确认删除
+          deleteCurrentFile();
+          showDeleteDialog = false;
+        }
+        if (M5Cardputer.Keyboard.isKeyPressed('c')) {
+          // 'c' 键：取消删除
+          showDeleteDialog = false;
+          Serial.println("Delete cancelled");
+        }
+      }
     }
     // 如果屏幕关闭，跳过绘制以节省CPU
     if (!screenOff) {
@@ -828,6 +881,7 @@ void Task_Audio(void *pvParameters) {
       Serial.printf("Task_Audio: next track requested: %s\n", audioFiles[n].c_str());
       if (SD.exists(audioFiles[n])) {
         audio.connecttoFS(SD, audioFiles[n].c_str());
+        currentPlayingIndex = n;  // 更新实际播放的索引
       } else {
         Serial.printf("Task_Audio: file not found: %s\n", audioFiles[n].c_str());
       }
@@ -922,11 +976,109 @@ void audio_eof_mp3(const char *info) {
   Serial.println(info);
   n++;
   if (n == fileCount) n = 0;
+  currentPlayingIndex = n;  // 更新实际播放的索引
   Serial.printf("eof: opening next file: %s\n", audioFiles[n].c_str());
   if (SD.exists(audioFiles[n])) {
     audio.connecttoFS(SD, audioFiles[n].c_str());
   } else {
     Serial.printf("eof: next file not found: %s\n", audioFiles[n].c_str());
+  }
+}
+
+// 删除当前选中的文件
+void deleteCurrentFile() {
+  if (fileCount == 0 || n >= fileCount) {
+    Serial.println("No file to delete");
+    return;
+  }
+  
+  int deleteIndex = n;  // 要删除的文件索引（当前选中的）
+  String fileToDelete = audioFiles[deleteIndex];
+  Serial.printf("Attempting to delete: %s (index %d)\n", fileToDelete.c_str(), deleteIndex);
+  
+  // 记录删除前是否正在播放，以及正在播放的是哪首歌
+  bool wasPlaying = (isPlaying && !stoped);
+  int playingIndexBeforeDelete = currentPlayingIndex;  // 删除前正在播放的歌曲索引
+  bool deletingPlayingSong = (deleteIndex == playingIndexBeforeDelete);  // 是否删除的是正在播放的歌曲
+  
+  // 如果删除的是正在播放的歌曲，先停止
+  if (wasPlaying && deletingPlayingSong) {
+    audio.stopSong();
+  }
+  
+  // 从SD卡删除文件
+  if (SD.exists(fileToDelete)) {
+    if (SD.remove(fileToDelete)) {
+      Serial.printf("File deleted successfully: %s\n", fileToDelete.c_str());
+    } else {
+      Serial.printf("Failed to delete file: %s\n", fileToDelete.c_str());
+      return;
+    }
+  } else {
+    Serial.printf("File not found on SD: %s\n", fileToDelete.c_str());
+  }
+  
+  // 从列表中移除文件
+  for (int i = deleteIndex; i < fileCount - 1; i++) {
+    audioFiles[i] = audioFiles[i + 1];
+  }
+  fileCount--;
+  
+  // 调整正在播放的索引：如果删除的索引 <= 正在播放的索引，正在播放的索引需要减1
+  int playingIndexAfterDelete = playingIndexBeforeDelete;
+  if (deleteIndex <= playingIndexBeforeDelete) {
+    playingIndexAfterDelete--;  // 正在播放的索引前移
+    if (playingIndexAfterDelete < 0 && fileCount > 0) playingIndexAfterDelete = 0;
+    if (playingIndexAfterDelete >= fileCount && fileCount > 0) playingIndexAfterDelete = fileCount - 1;
+  }
+  
+  // 调整当前选中索引 n
+  if (deleteIndex < n) {
+    n--;  // 删除的文件在当前位置之前，索引前移
+  } else if (deleteIndex == n) {
+    // 删除的就是当前选中的歌曲，需要调整选中索引
+    if (n >= fileCount) {
+      n = fileCount - 1;
+    }
+    if (n < 0) {
+      n = 0;
+    }
+  }
+  // 如果 deleteIndex > n，n 不变（删除的文件在当前位置之后）
+  
+  // 确保 n 在有效范围内
+  if (n < 0) n = 0;
+  if (n >= fileCount && fileCount > 0) n = fileCount - 1;
+  
+  // 如果删除的是正在播放的歌曲，需要切换到新歌曲
+  if (deletingPlayingSong) {
+    // 删除前正在播放的索引已经被调整了，现在需要切换到调整后的索引
+    if (fileCount > 0 && playingIndexAfterDelete >= 0 && playingIndexAfterDelete < fileCount) {
+      n = playingIndexAfterDelete;  // 让选中索引跟随播放索引
+      currentPlayingIndex = playingIndexAfterDelete;  // 更新全局变量
+      resetClock();
+      textPos = 90;
+      nextS = 1;
+      // 如果删除前正在播放，删除后继续播放新歌曲
+      if (wasPlaying) {
+        isPlaying = true;
+        stoped = false;
+      }
+      Serial.printf("Switched to new current file: %s (index %d)\n", audioFiles[n].c_str(), n);
+    } else {
+      // 没有文件了，停止播放
+      isPlaying = false;
+      stoped = true;
+      currentPlayingIndex = 0;
+      Serial.println("No more files available");
+    }
+  } else {
+    // 删除的不是正在播放的歌曲，继续播放当前歌曲，不切换
+    // 只需要更新 currentPlayingIndex 为调整后的索引
+    currentPlayingIndex = playingIndexAfterDelete;
+    Serial.printf("Deleted file (index %d) was not playing (was index %d, now %d), continuing with: %s\n", 
+                  deleteIndex, playingIndexBeforeDelete, playingIndexAfterDelete, 
+                  fileCount > 0 && playingIndexAfterDelete < fileCount ? audioFiles[playingIndexAfterDelete].c_str() : "none");
   }
 }
 
