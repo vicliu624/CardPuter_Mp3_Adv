@@ -141,6 +141,7 @@ Use PlatformIO to compile and flash.
    - Mode toggle via M key (replaces original B key random function)
    - Mode indicator displayed in top-right area (replaces scrolling song title)
    - Automatic next song selection based on selected mode
+   - Smart N/P key behavior: In random mode, both N and P keys select random songs (avoiding current playing song)
 
 5. **Fine Volume Control**
    - Added `-` key for decreasing volume (step 1)

@@ -1022,16 +1022,44 @@ void Task_TFT(void *pvParameters) {
         resetClock();
         isPlaying = false;
         textPos = 90;
-        n++;
-        if (n >= fileCount) n = 0;
+        if (playMode == 1) {
+          // Random mode: select a random song (avoid current playing song if possible)
+          if (fileCount <= 1) {
+            n = 0;
+          } else {
+            int newIndex;
+            do {
+              newIndex = random(0, fileCount);
+            } while (newIndex == currentPlayingIndex);
+            n = newIndex;
+          }
+        } else {
+          // Sequential mode: next song
+          n++;
+          if (n >= fileCount) n = 0;
+        }
         nextS = 1;
       }
       if (M5Cardputer.Keyboard.isKeyPressed('p')) {
         resetClock();
         isPlaying = false;
         textPos = 90;
-        n--;
-        if (n < 0) n = fileCount - 1;
+        if (playMode == 1) {
+          // Random mode: select a random song (avoid current playing song if possible)
+          if (fileCount <= 1) {
+            n = 0;
+          } else {
+            int newIndex;
+            do {
+              newIndex = random(0, fileCount);
+            } while (newIndex == currentPlayingIndex);
+            n = newIndex;
+          }
+        } else {
+          // Sequential mode: previous song
+          n--;
+          if (n < 0) n = fileCount - 1;
+        }
         nextS = 1;
       }
       if (M5Cardputer.Keyboard.isKeyPressed(';')) {
