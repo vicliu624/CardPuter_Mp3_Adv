@@ -80,21 +80,27 @@ int bri = 2;              // brightness index 0..4
 int brightness[5] = {60, 120, 180, 220, 255};
 bool stoped = false;      // spelling kept from original code
 bool isPlaying = true;
-bool screenOff = false;   // 屏幕是否关闭
-int savedBrightness = 2;  // 熄屏前保存的亮度值
-bool showDeleteDialog = false;  // 是否显示删除确认对话框
-int batteryPercent = 0;   // 缓存的电量百分比
-unsigned long lastBatteryUpdate = 0;  // 上次更新电量的时间
-const unsigned long BATTERY_UPDATE_INTERVAL = 30000;  // 电量更新间隔（毫秒）
-String cachedTimeStr = "";  // 缓存的时间字符串
-unsigned long lastTimeUpdate = 0;  // 上次更新时间的时间
-const unsigned long TIME_UPDATE_INTERVAL = 1000;  // 时间更新间隔（毫秒）
-unsigned long lastGraphUpdate = 0;  // 上次更新频谱图的时间
-const unsigned long GRAPH_UPDATE_INTERVAL = 200;  // 频谱图更新间隔（毫秒）
+bool screenOff = false;   // Screen off state
+int savedBrightness = 2;  // Brightness saved before screen off
+bool showDeleteDialog = false;  // Whether to show delete confirmation dialog
+int batteryPercent = 0;   // Cached battery percentage
+unsigned long lastBatteryUpdate = 0;  // Last battery update time
+const unsigned long BATTERY_UPDATE_INTERVAL = 30000;  // Battery update interval (ms)
+String cachedTimeStr = "";  // Cached time string
+unsigned long lastTimeUpdate = 0;  // Last time update time
+const unsigned long TIME_UPDATE_INTERVAL = 1000;  // Time update interval (ms)
+unsigned long lastGraphUpdate = 0;  // Last spectrum graph update time
+const unsigned long GRAPH_UPDATE_INTERVAL = 200;  // Spectrum graph update interval (ms)
+int lastSelectedIndex = -1;  // Last selected song index
+unsigned long selectedTime = 0;  // Time when current song was selected
+int selectedScrollPos = 8;  // Scroll position for selected song (initial position)
+const unsigned long SELECTED_SCROLL_DELAY = 1000;  // Delay before starting scroll after selection (ms)
 bool volUp = false;
 int n = 0;                // current file index (selected)
-int currentPlayingIndex = 0;  // 实际正在播放的歌曲索引
+int currentPlayingIndex = 0;  // Actually playing song index
 int nextS = 0;            // request to switch tracks
+// Playback mode: 0=Sequential, 1=Random, 2=Single Repeat
+int playMode = 0;  // Default sequential playback
 int graphSpeed = 0;
 int g[14] = {0};
 unsigned short light;
@@ -115,9 +121,79 @@ int fileCount = 0;
 void Task_TFT(void *pvParameters);
 void Task_Audio(void *pvParameters);
 void listFiles(fs::FS &fs, const char *dirname, uint8_t levels);
-void deleteCurrentFile();  // 删除当前选中的文件
+void deleteCurrentFile();  // Delete currently selected file
+const lgfx::U8g2font* detectAndGetFont(const String& text);  // Detect language and return appropriate font
 void resetClock() {
   rtc.setTime(0, 0, 0, 17, 1, 2021);
+}
+
+// Detect language from text and return appropriate font
+// Returns efontKR_12 for Korean, efontJA_12 for Japanese, efontCN_12 for Chinese, or nullptr for default
+const lgfx::U8g2font* detectAndGetFont(const String& text) {
+  if (text.length() == 0) return nullptr;
+  
+  const uint8_t* utf8 = (const uint8_t*)text.c_str();
+  bool hasKorean = false;
+  bool hasJapanese = false;
+  bool hasChinese = false;
+  
+  while (*utf8) {
+    uint32_t codePoint = 0;
+    
+    // Decode UTF-8 character
+    if ((*utf8 & 0x80) == 0) {
+      // ASCII character (0x00-0x7F)
+      codePoint = *utf8;
+      utf8++;
+    } else if ((*utf8 & 0xE0) == 0xC0) {
+      // 2-byte UTF-8 (0x80-0x7FF)
+      codePoint = ((*utf8 & 0x1F) << 6) | (*(utf8 + 1) & 0x3F);
+      utf8 += 2;
+    } else if ((*utf8 & 0xF0) == 0xE0) {
+      // 3-byte UTF-8 (0x800-0xFFFF)
+      codePoint = ((*utf8 & 0x0F) << 12) | ((*(utf8 + 1) & 0x3F) << 6) | (*(utf8 + 2) & 0x3F);
+      utf8 += 3;
+    } else if ((*utf8 & 0xF8) == 0xF0) {
+      // 4-byte UTF-8 (0x10000-0x10FFFF)
+      codePoint = ((*utf8 & 0x07) << 18) | ((*(utf8 + 1) & 0x3F) << 12) | ((*(utf8 + 2) & 0x3F) << 6) | (*(utf8 + 3) & 0x3F);
+      utf8 += 4;
+    } else {
+      // Invalid UTF-8, skip byte
+      utf8++;
+      continue;
+    }
+    
+    // Check Unicode ranges
+    if (codePoint >= 0xAC00 && codePoint <= 0xD7AF) {
+      // Korean Hangul Syllables
+      hasKorean = true;
+    } else if ((codePoint >= 0x3040 && codePoint <= 0x309F) ||  // Hiragana
+               (codePoint >= 0x30A0 && codePoint <= 0x30FF)) {  // Katakana
+      hasJapanese = true;
+    } else if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) {
+      // CJK Unified Ideographs (could be Chinese or Japanese Kanji)
+      // If we've already seen Hiragana/Katakana, it's likely Japanese
+      if (hasJapanese) {
+        hasJapanese = true;
+      } else {
+        hasChinese = true;
+      }
+    }
+    
+    // Early exit if we found Korean (highest priority)
+    if (hasKorean) break;
+  }
+  
+  // Priority: Korean > Japanese > Chinese > Default
+  if (hasKorean) {
+    return &fonts::efontKR_12;
+  } else if (hasJapanese) {
+    return &fonts::efontJA_12;
+  } else if (hasChinese) {
+    return &fonts::efontCN_12;
+  }
+  
+  return nullptr;  // Use default font for English/other languages
 }
 
 // Battery helper (assumes 12-bit ADC and ~2:1 divider to 3.3V ADC ref)
@@ -492,15 +568,14 @@ void setup() {
   // It can take over the I2S peripheral and conflict with ESP32-audioI2S.
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(brightness[bri]);
-  // 启用 UTF-8 支持以显示中文
+  // Enable UTF-8 support for Chinese character display
   M5Cardputer.Display.setAttribute(utf8_switch, true);
   sprite.createSprite(240, 135);
-  spr.createSprite(86, 16);
   SPI.begin(SD_SCK, SD_MISO, SD_MOSI);
   if (!SD.begin(SD_CS)) {
     Serial.println(F("ERROR: SD Mount Failed!"));
   }
-  // 从 /music 目录读取歌曲文件
+  // Read song files from /music directory
   listFiles(SD, "/music", MAX_FILES);
   if (fileCount == 0) {
     Serial.println("No files found in /music, scanning root as fallback");
@@ -535,6 +610,7 @@ void setup() {
       }
       if (codec_initialized) {
         audio.connecttoFS(SD, audioFiles[n].c_str());
+        currentPlayingIndex = n;  // Sync playing index on initialization
       } else {
         Serial.println("Skipping audio.connecttoFS(): codec not initialized");
       }
@@ -549,7 +625,7 @@ void setup() {
     grays[i] = M5Cardputer.Display.color565(co, co, co + 40);
     co = co - 13;
   }
-  // 初始化电量显示和时间缓存
+  // Initialize battery display and time cache
   batteryPercent = getBatteryPercent();
   lastBatteryUpdate = millis();
   cachedTimeStr = rtc.getTime().substring(3, 8);
@@ -577,7 +653,7 @@ void loop() {
       }
     }
   }
-  delay(200);  // 增加轮询间隔，降低CPU使用率
+  delay(200);  // Increase polling interval to reduce CPU usage
 }
 void draw() {
   if (graphSpeed == 0) {
@@ -600,7 +676,7 @@ void draw() {
     sprite.drawFastHLine(0, 134, 240, light);
     sprite.fillRect(139, 0, 3, 135, BLACK);
     sprite.fillRect(148, 14, 86, 42, BLACK);
-    sprite.fillRect(148, 59, 86, 16, BLACK);
+    sprite.fillRect(148, 59, 86, 16, BLACK);  // Playback mode display area
     sprite.fillTriangle(162, 18, 162, 26, 168, 22, GREEN);
     sprite.fillRect(162, 30, 6, 6, RED);
     sprite.drawFastVLine(143, 0, 135, light);
@@ -624,8 +700,11 @@ void draw() {
     }
     //volume bar
     sprite.fillRoundRect(172, 82, 60, 3, 2, YELLOW);
-    sprite.fillRoundRect(155 + ((volume / 5) * 17), 80, 10, 8, 2, grays[2]);
-    sprite.fillRoundRect(157 + ((volume / 5) * 17), 82, 6, 4, 2, grays[10]);
+    // Volume range 0-21, mapped to position 155-215 (60 pixel range)
+    // Use integer calculation for precision
+    int volumePos = 155 + (volume * 60 / 21);
+    sprite.fillRoundRect(volumePos, 80, 10, 8, 2, grays[2]);
+    sprite.fillRoundRect(volumePos + 2, 82, 6, 4, 2, grays[10]);
     // brightness
     sprite.fillRoundRect(172, 124, 30, 3, 2, MAGENTA);
     sprite.fillRoundRect(172 + (bri * 5), 122, 10, 8, 2, grays[2]);
@@ -633,7 +712,7 @@ void draw() {
     //BATTERY
     sprite.drawRect(206, 119, 28, 12, GREEN);
     sprite.fillRect(234, 122, 3, 6, GREEN);
-    //graph - 降低频谱图更新频率以节省CPU
+    //graph - Reduce spectrum graph update frequency to save CPU
     unsigned long now = millis();
     if (!stoped && (now - lastGraphUpdate >= GRAPH_UPDATE_INTERVAL)) {
       for (int i = 0; i < 14; i++) {
@@ -645,27 +724,160 @@ void draw() {
       for (int j = 0; j < g[i]; j++)
         sprite.fillRect(172 + (i * 4), 50 - j * 3, 3, 2, grays[4]);
     }
-    // 设置中文字体，行高改为 16 像素以适配中文显示
-    sprite.setFont(&fonts::efontCN_12);
+    // Check if selected song changed, reset scroll position if changed
+    if (lastSelectedIndex != n) {
+      lastSelectedIndex = n;
+      selectedTime = now;
+      selectedScrollPos = 8;  // Reset scroll position
+    }
+    
     sprite.setTextDatum(0);
-    // 显示 7 行（行高 16 像素）
+    // Display 7 lines (16 pixel line height)
     if (n < 3)
       for (int i = 0; i < 7; i++) {
-        if (i == n) sprite.setTextColor(WHITE, BLACK);
-        else sprite.setTextColor(GREEN, BLACK);
-        if (i < fileCount)
-          sprite.drawString(audioFiles[i].substring(1, 20), 8, 10 + (i * 16));
+        if (i < fileCount) {
+          // Set color: playing song=red, selected song=white, others=green
+          if (i == currentPlayingIndex) {
+            sprite.setTextColor(RED, BLACK);  // Currently playing song: red
+          } else if (i == n) {
+            sprite.setTextColor(WHITE, BLACK);  // Selected song: white
+          } else {
+            sprite.setTextColor(GREEN, BLACK);  // Other songs: green
+          }
+          // Extract filename (remove path and extension)
+          String fileName = audioFiles[i];
+          int lastSlash = fileName.lastIndexOf('/');
+          if (lastSlash >= 0) {
+            fileName = fileName.substring(lastSlash + 1);
+          }
+          // Remove file extension (.mp3, .wav, etc.)
+          int lastDot = fileName.lastIndexOf('.');
+          if (lastDot >= 0) {
+            fileName = fileName.substring(0, lastDot);
+          }
+          
+          // Detect language and set appropriate font
+          const lgfx::U8g2font* detectedFont = detectAndGetFont(fileName);
+          if (detectedFont) {
+            sprite.setFont(detectedFont);
+          } else {
+            sprite.setTextFont(0);  // Default font for English
+          }
+          
+          // If selected song and stayed for more than 1 second, show scroll effect
+          if (i == n && (now - selectedTime >= SELECTED_SCROLL_DELAY)) {
+            // Calculate scroll position (scroll from right to left)
+            // LIST box range: x from 4 to 133 (fillRect(4, 8, 130, 122), right edge=4+130-1=133)
+            // Scrollbar area: x from 129 to 133 (fillRect(129, 8, 5, 122), right edge=129+5-1=133)
+            // Text display area: x from 8 to 128 (must not enter scrollbar area 129-133)
+            const int TEXT_LEFT = 8;   // Text left boundary
+            const int TEXT_RIGHT = 128; // Text right boundary (scrollbar starts at 129, 1px margin)
+            const int LIST_LEFT = 4;    // LIST box left boundary
+            const int LIST_TOP = 8;     // LIST box top boundary
+            const int LIST_WIDTH = 125; // Text display area width (128-8+1=121, but use 125 to ensure no overflow)
+            const int LIST_HEIGHT = 122; // LIST box height
+            
+            if (graphSpeed == 0) {  // Update only every 4 frames
+              selectedScrollPos = selectedScrollPos - 2;
+              // Estimate text width (Chinese font ~6px wide, English ~4px wide, average 5)
+              int textWidth = fileName.length() * 5;
+              // If text completely scrolled to left (text right edge beyond left boundary), reset to right
+              if (selectedScrollPos + textWidth < TEXT_LEFT) {
+                selectedScrollPos = TEXT_RIGHT;  // Start from right
+              }
+              // Ensure text doesn't exceed right boundary (must not enter scrollbar area)
+              if (selectedScrollPos > TEXT_RIGHT) {
+                selectedScrollPos = TEXT_RIGHT;
+              }
+            }
+            // Display full filename (no truncation), use clipRect to limit within text display area (excluding scrollbar)
+            sprite.setClipRect(LIST_LEFT, LIST_TOP, LIST_WIDTH, LIST_HEIGHT);  // Limit drawing area, width 125 ensures no entry into scrollbar
+            sprite.drawString(fileName, selectedScrollPos, 10 + (i * 16));
+            sprite.clearClipRect();  // Clear clip region
+          } else {
+            // Normal display: truncate to first 20 characters (ensure no overflow)
+            String displayName = fileName;
+            if (displayName.length() > 20) {
+              displayName = displayName.substring(0, 20);
+            }
+            sprite.drawString(displayName, 8, 10 + (i * 16));
+          }
+        }
       }
     int yos = 0;
     if (n >= 3)
       for (int i = n - 3; i < n - 3 + 7; i++) {
-        if (i == n) sprite.setTextColor(WHITE, BLACK);
-        else sprite.setTextColor(GREEN, BLACK);
-        if (i < fileCount)
-          sprite.drawString(audioFiles[i].substring(1, 20), 8, 10 + (yos * 16));
+        if (i < fileCount) {
+          // Set color: playing song=red, selected song=white, others=green
+          if (i == currentPlayingIndex) {
+            sprite.setTextColor(RED, BLACK);  // Currently playing song: red
+          } else if (i == n) {
+            sprite.setTextColor(WHITE, BLACK);  // Selected song: white
+          } else {
+            sprite.setTextColor(GREEN, BLACK);  // Other songs: green
+          }
+          // Extract filename (remove path and extension)
+          String fileName = audioFiles[i];
+          int lastSlash = fileName.lastIndexOf('/');
+          if (lastSlash >= 0) {
+            fileName = fileName.substring(lastSlash + 1);
+          }
+          // Remove file extension (.mp3, .wav, etc.)
+          int lastDot = fileName.lastIndexOf('.');
+          if (lastDot >= 0) {
+            fileName = fileName.substring(0, lastDot);
+          }
+          
+          // Detect language and set appropriate font
+          const lgfx::U8g2font* detectedFont = detectAndGetFont(fileName);
+          if (detectedFont) {
+            sprite.setFont(detectedFont);
+          } else {
+            sprite.setTextFont(0);  // Default font for English
+          }
+          
+          // If selected song and stayed for more than 1 second, show scroll effect
+          if (i == n && (now - selectedTime >= SELECTED_SCROLL_DELAY)) {
+            // Calculate scroll position (scroll from right to left)
+            // LIST box range: x from 4 to 133 (fillRect(4, 8, 130, 122), right edge=4+130-1=133)
+            // Scrollbar area: x from 129 to 133 (fillRect(129, 8, 5, 122), right edge=129+5-1=133)
+            // Text display area: x from 8 to 128 (must not enter scrollbar area 129-133)
+            const int TEXT_LEFT = 8;   // Text left boundary
+            const int TEXT_RIGHT = 128; // Text right boundary (scrollbar starts at 129, 1px margin)
+            const int LIST_LEFT = 4;    // LIST box left boundary
+            const int LIST_TOP = 8;     // LIST box top boundary
+            const int LIST_WIDTH = 125; // Text display area width (128-8+1=121, but use 125 to ensure no overflow)
+            const int LIST_HEIGHT = 122; // LIST box height
+            
+            if (graphSpeed == 0) {  // Update only every 4 frames
+              selectedScrollPos = selectedScrollPos - 2;
+              // Estimate text width (Chinese font ~6px wide, English ~4px wide, average 5)
+              int textWidth = fileName.length() * 5;
+              // If text completely scrolled to left (text right edge beyond left boundary), reset to right
+              if (selectedScrollPos + textWidth < TEXT_LEFT) {
+                selectedScrollPos = TEXT_RIGHT;  // Start from right
+              }
+              // Ensure text doesn't exceed right boundary (must not enter scrollbar area)
+              if (selectedScrollPos > TEXT_RIGHT) {
+                selectedScrollPos = TEXT_RIGHT;
+              }
+            }
+            // Display full filename (no truncation), use clipRect to limit within text display area (excluding scrollbar)
+            sprite.setClipRect(LIST_LEFT, LIST_TOP, LIST_WIDTH, LIST_HEIGHT);  // Limit drawing area, width 125 ensures no entry into scrollbar
+            sprite.drawString(fileName, selectedScrollPos, 10 + (yos * 16));
+            sprite.clearClipRect();  // Clear clip region
+          } else {
+            // Normal display: truncate to first 20 characters (ensure no overflow)
+            String displayName = fileName;
+            if (displayName.length() > 20) {
+              displayName = displayName.substring(0, 20);
+            }
+            sprite.drawString(displayName, 8, 10 + (yos * 16));
+          }
+        }
         yos++;
       }
-    // 恢复默认字体用于其他文本
+    // Restore default font for other text
     sprite.setTextFont(0);
     sprite.setTextColor(grays[1], gray);
     sprite.drawString("WINAMP", 150, 4);
@@ -689,7 +901,7 @@ void draw() {
     }
     sprite.setTextColor(GREEN, BLACK);
   sprite.setFont(&DSEG7_Classic_Mini_Regular_16);
-    // 缓存时间字符串，减少字符串操作
+    // Cache time string to reduce string operations
     if (!stoped) {
       if (now - lastTimeUpdate >= TIME_UPDATE_INTERVAL) {
         cachedTimeStr = rtc.getTime().substring(3, 8);
@@ -698,7 +910,7 @@ void draw() {
       sprite.drawString(cachedTimeStr, 172, 18);
     }
     sprite.setTextFont(0);
-    // 降低电量刷新率：每 30 秒更新一次，减少 ADC 读取和显示跳动
+    // Reduce battery refresh rate: update every 30 seconds to reduce ADC reads and display jitter
     if (now - lastBatteryUpdate >= BATTERY_UPDATE_INTERVAL) {
       batteryPercent = getBatteryPercent();
       lastBatteryUpdate = now;
@@ -706,28 +918,31 @@ void draw() {
     sprite.setTextDatum(3);
     sprite.drawString(String(batteryPercent) + "%", 220, 121);
     sprite.setTextColor(BLACK, grays[4]);
-    sprite.drawString("B", 220, 96);
+    sprite.drawString("M", 220, 96);
     sprite.drawString("N", 198, 96);
     sprite.drawString("P", 176, 96);
     sprite.drawString("A", 154, 96);
     sprite.setTextColor(BLACK, grays[5]);
     sprite.drawString(">>", 202, 103);
     sprite.drawString("<<", 180, 103);
-    spr.fillSprite(BLACK);
-    spr.setTextColor(GREEN, BLACK);
-    if (!stoped) {
-      // 降低文本滚动速度，减少绘制频率
-      if (graphSpeed == 0) {  // 只在每4帧更新一次（配合graphSpeed机制）
-        textPos = textPos - 2;
-        if (textPos < -300) textPos = 90;
-      }
-      spr.drawString(audioFiles[n].substring(1, audioFiles[n].length()), textPos, 4);
-    }
-    spr.pushSprite(&sprite, 148, 59);
     
-    // 如果显示删除对话框，绘制对话框
+    // Display playback mode
+    sprite.setTextFont(0);
+    sprite.setTextColor(GREEN, BLACK);
+    sprite.setTextDatum(0);
+    String modeText = "";
+    if (playMode == 0) {
+      modeText = "SEQ";  // Sequential playback
+    } else if (playMode == 1) {
+      modeText = "RND";  // Random playback
+    } else if (playMode == 2) {
+      modeText = "ONE";  // Single repeat
+    }
+    sprite.drawString(modeText, 150, 63);
+    
+    // If showing delete dialog, draw dialog
     if (showDeleteDialog) {
-      // 绘制对话框背景和边框（增加高度以容纳中文）
+      // Draw dialog background and border (increased height to accommodate Chinese)
       sprite.fillRect(20, 40, 200, 70, BLACK);
       sprite.drawRect(20, 40, 200, 70, WHITE);
       sprite.setTextFont(0);
@@ -735,21 +950,32 @@ void draw() {
       sprite.setTextDatum(0);
       sprite.drawString("Delete song?", 30, 45);
       if (n < fileCount) {
-        // 使用和曲名列表一样的中文字体和行高
-        sprite.setFont(&fonts::efontCN_12);
+        // Detect language and use appropriate font (same as song list)
         String fileName = audioFiles[n];
-        // 提取文件名（去掉路径）
+        // Extract filename (remove path)
         int lastSlash = fileName.lastIndexOf('/');
         if (lastSlash >= 0) {
           fileName = fileName.substring(lastSlash + 1);
         }
-        // 截取文件名（最多显示20个字符，和列表一致）
+        // Remove file extension
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot >= 0) {
+          fileName = fileName.substring(0, lastDot);
+        }
+        // Detect language and set appropriate font
+        const lgfx::U8g2font* detectedFont = detectAndGetFont(fileName);
+        if (detectedFont) {
+          sprite.setFont(detectedFont);
+        } else {
+          sprite.setTextFont(0);  // Default font for English
+        }
+        // Truncate filename (max 20 characters, same as list)
         if (fileName.length() > 20) {
           fileName = fileName.substring(0, 20);
         }
-        // 使用16像素行高，和曲名列表一致
+        // Use 16 pixel line height, same as song list
         sprite.drawString(fileName, 30, 57);
-        // 恢复默认字体用于其他文本
+        // Restore default font for other text
         sprite.setTextFont(0);
       }
       sprite.drawString("Y:Yes  C:Cancel", 30, 75);
@@ -775,6 +1001,18 @@ void Task_TFT(void *pvParameters) {
         volume = volume + 5;
         if (volume > 20) volume = 5;
       }
+      if (M5Cardputer.Keyboard.isKeyPressed('-')) {
+        // '-' key: Decrease volume
+        volUp = true;
+        volume = volume - 1;
+        if (volume < 0) volume = 0;
+      }
+      if (M5Cardputer.Keyboard.isKeyPressed('=')) {
+        // '=' key: Increase volume
+        volUp = true;
+        volume = volume + 1;
+        if (volume > 21) volume = 21;
+      }
       if (M5Cardputer.Keyboard.isKeyPressed('l')) {
         bri++;
         if (bri == 5) bri = 0;
@@ -798,13 +1036,13 @@ void Task_TFT(void *pvParameters) {
       }
       if (M5Cardputer.Keyboard.isKeyPressed(';')) {
         n--;
-        if (n >= fileCount)
-          n = 0;
+        if (n < 0)
+          n = fileCount - 1;  // Loop to last song
       }
       if (M5Cardputer.Keyboard.isKeyPressed('.')) {
         n++;
-        if (n < 0)
-          n = fileCount - 1;
+        if (n >= fileCount)
+          n = 0;  // Loop to first song
       }
       if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
         resetClock();
@@ -813,24 +1051,23 @@ void Task_TFT(void *pvParameters) {
         textPos = 90;
         nextS = 1;
       }
-      if (M5Cardputer.Keyboard.isKeyPressed('b')) {
-        resetClock();
-        isPlaying = false;
-        textPos = 90;
-        n = random(0, fileCount);
-        nextS = 1;
+      if (M5Cardputer.Keyboard.isKeyPressed('m')) {
+        // 'm' key: Toggle playback mode (Sequential -> Random -> Single Repeat -> Sequential)
+        playMode++;
+        if (playMode > 2) playMode = 0;
+        Serial.printf("Play mode changed to: %d\n", playMode);
       }
       if (M5Cardputer.Keyboard.isKeyPressed('s')) {
-        // 's' 键：熄屏/亮屏切换
+        // 's' key: Screen off/on toggle
         if (screenOff) {
-          // 亮屏：恢复到熄屏前的亮度
+          // Screen on: Restore brightness before screen off
           screenOff = false;
           bri = savedBrightness;
           M5Cardputer.Display.wakeup();
           M5Cardputer.Display.setBrightness(brightness[bri]);
           Serial.println("Screen ON - restored brightness");
         } else {
-          // 熄屏：保存当前亮度并关闭屏幕
+          // Screen off: Save current brightness and turn off screen
           savedBrightness = bri;
           screenOff = true;
           M5Cardputer.Display.sleep();
@@ -838,7 +1075,7 @@ void Task_TFT(void *pvParameters) {
         }
       }
       if (M5Cardputer.Keyboard.isKeyPressed('d')) {
-        // 'd' 键：显示删除确认对话框
+        // 'd' key: Show delete confirmation dialog
         if (!showDeleteDialog && fileCount > 0 && n < fileCount) {
           showDeleteDialog = true;
           Serial.printf("Delete dialog shown for: %s\n", audioFiles[n].c_str());
@@ -846,22 +1083,22 @@ void Task_TFT(void *pvParameters) {
       }
       if (showDeleteDialog) {
         if (M5Cardputer.Keyboard.isKeyPressed('y')) {
-          // 'y' 键：确认删除
+          // 'y' key: Confirm delete
           deleteCurrentFile();
           showDeleteDialog = false;
         }
         if (M5Cardputer.Keyboard.isKeyPressed('c')) {
-          // 'c' 键：取消删除
+          // 'c' key: Cancel delete
           showDeleteDialog = false;
           Serial.println("Delete cancelled");
         }
       }
     }
-    // 如果屏幕关闭，跳过绘制以节省CPU
+    // If screen is off, skip drawing to save CPU
     if (!screenOff) {
       draw();
     }
-    vTaskDelay(50 / portTICK_PERIOD_MS);  // 平衡刷新率：50ms (20fps)，既流畅又省电
+    vTaskDelay(50 / portTICK_PERIOD_MS);  // Balance refresh rate: 50ms (20fps), smooth and power-efficient
   }
 }
 void Task_Audio(void *pvParameters) {
@@ -881,7 +1118,7 @@ void Task_Audio(void *pvParameters) {
       Serial.printf("Task_Audio: next track requested: %s\n", audioFiles[n].c_str());
       if (SD.exists(audioFiles[n])) {
         audio.connecttoFS(SD, audioFiles[n].c_str());
-        currentPlayingIndex = n;  // 更新实际播放的索引
+        currentPlayingIndex = n;  // Update actual playing index
       } else {
         Serial.printf("Task_Audio: file not found: %s\n", audioFiles[n].c_str());
       }
@@ -974,39 +1211,52 @@ void audio_eof_mp3(const char *info) {
   resetClock();
   Serial.print("eof_mp3     ");
   Serial.println(info);
-  n++;
-  if (n == fileCount) n = 0;
-  currentPlayingIndex = n;  // 更新实际播放的索引
-  Serial.printf("eof: opening next file: %s\n", audioFiles[n].c_str());
-  if (SD.exists(audioFiles[n])) {
-    audio.connecttoFS(SD, audioFiles[n].c_str());
+  
+  // Determine next song based on playback mode
+  if (playMode == 0) {
+    // Sequential playback: next song
+    currentPlayingIndex++;
+    if (currentPlayingIndex >= fileCount) currentPlayingIndex = 0;
+  } else if (playMode == 1) {
+    // Random playback: random selection
+    currentPlayingIndex = random(0, fileCount);
+  } else if (playMode == 2) {
+    // Single repeat: don't change index, continue playing current song
+    // currentPlayingIndex remains unchanged
+  }
+  
+  n = currentPlayingIndex;  // Sync selected index to playing index
+  Serial.printf("eof: opening next file: %s (index %d, mode %d)\n", 
+                audioFiles[currentPlayingIndex].c_str(), currentPlayingIndex, playMode);
+  if (SD.exists(audioFiles[currentPlayingIndex])) {
+    audio.connecttoFS(SD, audioFiles[currentPlayingIndex].c_str());
   } else {
-    Serial.printf("eof: next file not found: %s\n", audioFiles[n].c_str());
+    Serial.printf("eof: next file not found: %s\n", audioFiles[currentPlayingIndex].c_str());
   }
 }
 
-// 删除当前选中的文件
+// Delete currently selected file
 void deleteCurrentFile() {
   if (fileCount == 0 || n >= fileCount) {
     Serial.println("No file to delete");
     return;
   }
   
-  int deleteIndex = n;  // 要删除的文件索引（当前选中的）
+  int deleteIndex = n;  // File index to delete (currently selected)
   String fileToDelete = audioFiles[deleteIndex];
   Serial.printf("Attempting to delete: %s (index %d)\n", fileToDelete.c_str(), deleteIndex);
   
-  // 记录删除前是否正在播放，以及正在播放的是哪首歌
+  // Record if playing before delete, and which song is playing
   bool wasPlaying = (isPlaying && !stoped);
-  int playingIndexBeforeDelete = currentPlayingIndex;  // 删除前正在播放的歌曲索引
-  bool deletingPlayingSong = (deleteIndex == playingIndexBeforeDelete);  // 是否删除的是正在播放的歌曲
+  int playingIndexBeforeDelete = currentPlayingIndex;  // Playing song index before delete
+  bool deletingPlayingSong = (deleteIndex == playingIndexBeforeDelete);  // Whether deleting the currently playing song
   
-  // 如果删除的是正在播放的歌曲，先停止
+  // If deleting currently playing song, stop first
   if (wasPlaying && deletingPlayingSong) {
     audio.stopSong();
   }
   
-  // 从SD卡删除文件
+  // Delete file from SD card
   if (SD.exists(fileToDelete)) {
     if (SD.remove(fileToDelete)) {
       Serial.printf("File deleted successfully: %s\n", fileToDelete.c_str());
@@ -1018,25 +1268,25 @@ void deleteCurrentFile() {
     Serial.printf("File not found on SD: %s\n", fileToDelete.c_str());
   }
   
-  // 从列表中移除文件
+  // Remove file from list
   for (int i = deleteIndex; i < fileCount - 1; i++) {
     audioFiles[i] = audioFiles[i + 1];
   }
   fileCount--;
   
-  // 调整正在播放的索引：如果删除的索引 <= 正在播放的索引，正在播放的索引需要减1
+  // Adjust playing index: if delete index <= playing index, playing index needs to decrease by 1
   int playingIndexAfterDelete = playingIndexBeforeDelete;
   if (deleteIndex <= playingIndexBeforeDelete) {
-    playingIndexAfterDelete--;  // 正在播放的索引前移
+    playingIndexAfterDelete--;  // Playing index moves forward
     if (playingIndexAfterDelete < 0 && fileCount > 0) playingIndexAfterDelete = 0;
     if (playingIndexAfterDelete >= fileCount && fileCount > 0) playingIndexAfterDelete = fileCount - 1;
   }
   
-  // 调整当前选中索引 n
+  // Adjust current selected index n
   if (deleteIndex < n) {
-    n--;  // 删除的文件在当前位置之前，索引前移
+    n--;  // Deleted file is before current position, index moves forward
   } else if (deleteIndex == n) {
-    // 删除的就是当前选中的歌曲，需要调整选中索引
+    // Deleted the currently selected song, need to adjust selected index
     if (n >= fileCount) {
       n = fileCount - 1;
     }
@@ -1044,37 +1294,37 @@ void deleteCurrentFile() {
       n = 0;
     }
   }
-  // 如果 deleteIndex > n，n 不变（删除的文件在当前位置之后）
+  // If deleteIndex > n, n remains unchanged (deleted file is after current position)
   
-  // 确保 n 在有效范围内
+  // Ensure n is within valid range
   if (n < 0) n = 0;
   if (n >= fileCount && fileCount > 0) n = fileCount - 1;
   
-  // 如果删除的是正在播放的歌曲，需要切换到新歌曲
+  // If deleting currently playing song, need to switch to new song
   if (deletingPlayingSong) {
-    // 删除前正在播放的索引已经被调整了，现在需要切换到调整后的索引
+    // Playing index before delete has been adjusted, now need to switch to adjusted index
     if (fileCount > 0 && playingIndexAfterDelete >= 0 && playingIndexAfterDelete < fileCount) {
-      n = playingIndexAfterDelete;  // 让选中索引跟随播放索引
-      currentPlayingIndex = playingIndexAfterDelete;  // 更新全局变量
+      n = playingIndexAfterDelete;  // Make selected index follow playing index
+      currentPlayingIndex = playingIndexAfterDelete;  // Update global variable
       resetClock();
       textPos = 90;
       nextS = 1;
-      // 如果删除前正在播放，删除后继续播放新歌曲
+      // If playing before delete, continue playing new song after delete
       if (wasPlaying) {
         isPlaying = true;
         stoped = false;
       }
       Serial.printf("Switched to new current file: %s (index %d)\n", audioFiles[n].c_str(), n);
     } else {
-      // 没有文件了，停止播放
+      // No more files, stop playback
       isPlaying = false;
       stoped = true;
       currentPlayingIndex = 0;
       Serial.println("No more files available");
     }
   } else {
-    // 删除的不是正在播放的歌曲，继续播放当前歌曲，不切换
-    // 只需要更新 currentPlayingIndex 为调整后的索引
+    // Deleted song was not playing, continue playing current song, don't switch
+    // Only need to update currentPlayingIndex to adjusted index
     currentPlayingIndex = playingIndexAfterDelete;
     Serial.printf("Deleted file (index %d) was not playing (was index %d, now %d), continuing with: %s\n", 
                   deleteIndex, playingIndexBeforeDelete, playingIndexAfterDelete, 
