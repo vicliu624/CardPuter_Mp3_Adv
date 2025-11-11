@@ -154,11 +154,33 @@ const lgfx::U8g2font* detectAndGetFont(const String& text) {
   return nullptr;  // Use default font for English/other languages
 }
 
-// Battery helper (assumes 12-bit ADC and ~2:1 divider to 3.3V ADC ref)
+// Battery helper for M5Cardputer Advanced
+// M5Cardputer Advanced uses AXP2101 PMIC which provides accurate battery level
+// The library's getBatteryLevel() uses the PMIC's internal gauge for accurate readings
+// Battery capacity (1750mAh) is handled by the PMIC, not by voltage-to-percentage mapping
 static int getBatteryPercent() {
+  // Try to use M5Cardputer's built-in Power API first (recommended for Advanced version)
+  // This uses AXP2101 PMIC's internal battery gauge for accurate readings
+  int level = M5Cardputer.Power.getBatteryLevel();
+  
+  // If Power API returns valid value (0-100), use it
+  // Returns -1 or -2 if not supported or error
+  if (level >= 0 && level <= 100) {
+    return level;
+  }
+  
+  // Fallback: Direct ADC reading (for Standard version or if PMIC not available)
+  // This method uses voltage-to-percentage mapping which is less accurate
+  // Voltage range: 3.3V (0%) to 4.2V (100%) is typical for Li-Po batteries
+  // Note: Battery capacity (mAh) doesn't directly affect voltage-to-percentage calculation
+  // The voltage range is determined by battery chemistry, not capacity
   int raw = analogRead(BAT_ADC_PIN);
-  float voltage = (raw / 4095.0f) * 3.3f * 2.0f; // approximate divider x2
+  float voltage = (raw / 4095.0f) * 3.3f * 2.0f; // 2:1 voltage divider assumption
   int mv = (int)(voltage * 1000.0f);
+  
+  // Voltage-to-percentage mapping for Li-Po batteries
+  // 3.3V = 0%, 4.2V = 100% (typical range)
+  // Note: This is a linear approximation; actual battery discharge curve is non-linear
   int percent = constrain(map(mv, 3300, 4200, 0, 100), 0, 100);
   return percent;
 }
