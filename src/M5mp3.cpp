@@ -126,6 +126,7 @@ void Task_Audio(void *pvParameters);
 void listFiles(fs::FS &fs, const char *dirname, uint8_t levels);
 void deleteCurrentFile();  // Delete currently selected file
 const lgfx::U8g2font* detectAndGetFont(const String& text);  // Detect language and return appropriate font
+void captureScreenshot();  // Capture current screen and save to SD card
 void resetClock() {
   rtc.setTime(0, 0, 0, 17, 1, 2021);
 }
@@ -1157,6 +1158,10 @@ void Task_TFT(void *pvParameters) {
           Serial.println("Delete cancelled");
         }
       }
+      if (M5Cardputer.Keyboard.isKeyPressed('f')) {
+        // 'f' key: Capture screenshot
+        captureScreenshot();
+      }
     }
     // If screen is off, skip drawing to save CPU
     if (!screenOff) {
@@ -1400,5 +1405,125 @@ void deleteCurrentFile() {
                   deleteIndex, playingIndexBeforeDelete, playingIndexAfterDelete, 
                   fileCount > 0 && playingIndexAfterDelete < fileCount ? audioFiles[playingIndexAfterDelete].c_str() : "none");
   }
+}
+
+// Capture screenshot and save to SD card
+void captureScreenshot() {
+  const int SCREEN_WIDTH = 240;
+  const int SCREEN_HEIGHT = 135;
+  
+  // Create /screen directory if it doesn't exist
+  if (!SD.exists("/screen")) {
+    SD.mkdir("/screen");
+    Serial.println("Created /screen directory");
+  }
+  
+  // Generate filename with timestamp
+  String timestamp = rtc.getTime("%Y%m%d_%H%M%S");
+  String filename = "/screen/screenshot_" + timestamp + ".bmp";
+  
+  // Read pixel data from sprite (RGB565 format)
+  uint16_t* pixelBuffer = (uint16_t*)heap_caps_malloc(SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint16_t), MALLOC_CAP_DMA);
+  if (!pixelBuffer) {
+    Serial.println("Failed to allocate memory for screenshot");
+    return;
+  }
+  
+  // Read entire sprite content (sprite contains all drawn content)
+  sprite.readRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, pixelBuffer);
+  
+  // Open file for writing
+  File file = SD.open(filename, FILE_WRITE);
+  if (!file) {
+    Serial.printf("Failed to create file: %s\n", filename.c_str());
+    heap_caps_free(pixelBuffer);
+    return;
+  }
+  
+  // BMP file header (14 bytes)
+  uint8_t bmpHeader[14] = {
+    'B', 'M',  // Signature
+    0, 0, 0, 0,  // File size (will be filled later)
+    0, 0, 0, 0,  // Reserved
+    54, 0, 0, 0  // Offset to pixel data (54 bytes)
+  };
+  
+  // BMP info header (40 bytes)
+  uint32_t rowSize = ((SCREEN_WIDTH * 3 + 3) / 4) * 4;  // Row size must be multiple of 4
+  uint32_t imageSize = rowSize * SCREEN_HEIGHT;
+  uint32_t fileSize = 54 + imageSize;
+  
+  uint8_t bmpInfo[40] = {
+    40, 0, 0, 0,  // Info header size
+    (uint8_t)(SCREEN_WIDTH & 0xFF), (uint8_t)((SCREEN_WIDTH >> 8) & 0xFF), (uint8_t)((SCREEN_WIDTH >> 16) & 0xFF), (uint8_t)((SCREEN_WIDTH >> 24) & 0xFF),  // Width
+    (uint8_t)(SCREEN_HEIGHT & 0xFF), (uint8_t)((SCREEN_HEIGHT >> 8) & 0xFF), (uint8_t)((SCREEN_HEIGHT >> 16) & 0xFF), (uint8_t)((SCREEN_HEIGHT >> 24) & 0xFF),  // Height
+    1, 0,  // Planes
+    24, 0,  // Bits per pixel (24-bit RGB)
+    0, 0, 0, 0,  // Compression (none)
+    (uint8_t)(imageSize & 0xFF), (uint8_t)((imageSize >> 8) & 0xFF), (uint8_t)((imageSize >> 16) & 0xFF), (uint8_t)((imageSize >> 24) & 0xFF),  // Image size
+    0, 0, 0, 0,  // X pixels per meter
+    0, 0, 0, 0,  // Y pixels per meter
+    0, 0, 0, 0,  // Colors used
+    0, 0, 0, 0   // Important colors
+  };
+  
+  // Update file size in header
+  bmpHeader[2] = fileSize & 0xFF;
+  bmpHeader[3] = (fileSize >> 8) & 0xFF;
+  bmpHeader[4] = (fileSize >> 16) & 0xFF;
+  bmpHeader[5] = (fileSize >> 24) & 0xFF;
+  
+  // Write headers
+  file.write(bmpHeader, 14);
+  file.write(bmpInfo, 40);
+  
+  // Convert RGB565 to BGR888 and write pixel data (BMP stores pixels bottom-to-top)
+  uint8_t* rowBuffer = (uint8_t*)heap_caps_malloc(rowSize, MALLOC_CAP_DMA);
+  if (!rowBuffer) {
+    Serial.println("Failed to allocate memory for row buffer");
+    file.close();
+    heap_caps_free(pixelBuffer);
+    return;
+  }
+  
+  for (int y = SCREEN_HEIGHT - 1; y >= 0; y--) {  // BMP is bottom-to-top
+    int rowOffset = 0;
+    for (int x = 0; x < SCREEN_WIDTH; x++) {
+      uint16_t pixel = pixelBuffer[y * SCREEN_WIDTH + x];
+      // readRect returns swap565 format (byte-swapped RGB565)
+      // Swap bytes first to convert swap565 to rgb565: low byte and high byte are swapped
+      uint16_t rgb565 = ((pixel & 0xFF) << 8) | ((pixel >> 8) & 0xFF);
+      
+      // Now extract from standard RGB565 format: RRRRR GGGGGG BBBBB
+      // RGB565 bit layout: RRRRRGGG GGGBBBBB (bits 15-0)
+      uint8_t r5 = (rgb565 >> 11) & 0x1F;  // bits 15-11: red 5 bits
+      uint8_t g6 = (rgb565 >> 5) & 0x3F;   // bits 10-5: green 6 bits
+      uint8_t b5 = rgb565 & 0x1F;          // bits 4-0: blue 5 bits
+      
+      // Convert to 8-bit using proper bit expansion (matches M5GFX library)
+      // R: 5-bit -> 8-bit: (r5 << 3) | (r5 >> 2)
+      // G: 6-bit -> 8-bit: (g6 << 2) | (g6 >> 4)
+      // B: 5-bit -> 8-bit: (b5 << 3) | (b5 >> 2)
+      uint8_t r = (r5 << 3) | (r5 >> 2);
+      uint8_t g = (g6 << 2) | (g6 >> 4);
+      uint8_t b = (b5 << 3) | (b5 >> 2);
+      
+      // BMP format uses BGR order
+      rowBuffer[rowOffset++] = b;  // B
+      rowBuffer[rowOffset++] = g;  // G
+      rowBuffer[rowOffset++] = r;  // R
+    }
+    // Pad row to multiple of 4 bytes
+    while (rowOffset < rowSize) {
+      rowBuffer[rowOffset++] = 0;
+    }
+    file.write(rowBuffer, rowSize);
+  }
+  
+  file.close();
+  heap_caps_free(pixelBuffer);
+  heap_caps_free(rowBuffer);
+  
+  Serial.printf("Screenshot saved: %s\n", filename.c_str());
 }
 

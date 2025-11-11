@@ -66,6 +66,13 @@ An advanced MP3 player based on M5Cardputer, featuring Chinese character display
   - **Y** - Confirm delete currently selected song
   - **C** - Cancel delete
 
+### Screenshot
+- **F** - Capture screenshot and save to SD card
+  - Screenshots are saved in `/screen` directory
+  - Filename format: `screenshot_YYYYMMDD_HHMMSS.bmp`
+  - Automatically creates `/screen` directory if it doesn't exist
+  - Saves as 24-bit BMP format (240x135 pixels)
+
 ## Technical Features
 
 ### Performance Optimization
@@ -93,6 +100,9 @@ An advanced MP3 player based on M5Cardputer, featuring Chinese character display
 /music/          # Recommended music file directory
   ├── song1.mp3
   ├── song2.wav
+  └── ...
+/screen/         # Screenshot directory (auto-created)
+  ├── screenshot_20240117_120530.bmp
   └── ...
 ```
 
@@ -160,6 +170,13 @@ Use PlatformIO to compile and flash.
    - Enables independent navigation and playback tracking
    - Properly handles index adjustments during song deletion
 
+8. **Screenshot Feature**
+   - Added screenshot capture functionality (F key)
+   - Saves screenshots as 24-bit BMP files to `/screen` directory
+   - Automatic directory creation if `/screen` doesn't exist
+   - Filename includes timestamp for easy identification
+   - Captures full screen (240x135 pixels) from sprite buffer
+
 #### Enhanced Features
 
 1. **File Organization**
@@ -214,3 +231,4 @@ Use PlatformIO to compile and flash.
 - Audio files are recommended to be placed in `/music` directory
 - Deleting songs permanently removes files from SD card, use with caution
 - In single repeat mode, the song automatically repeats after finishing
+- Screenshots are saved as BMP files and can be viewed on any device that supports BMP format
