@@ -1,0 +1,53 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags like v2.1.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install PlatformIO
+      uses: platformio/platformio-core-action@v1
+      
+    - name: Build firmware
+      run: pio run -e m5stack-cardputer
+      
+    - name: Extract version from tag
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+    - name: Create release directory
+      run: |
+        mkdir -p releases/v${{ steps.get_version.outputs.VERSION }}
+        cp .pio/build/m5stack-cardputer/firmware.bin releases/v${{ steps.get_version.outputs.VERSION }}/firmware_v${{ steps.get_version.outputs.VERSION }}.bin
+        
+    - name: Generate release notes
+      run: |
+        if [ -f "CHANGELOG.md" ]; then
+          VERSION="${{ steps.get_version.outputs.VERSION }}"
+          awk "/^## \[${VERSION}\]/,/^## \[/" CHANGELOG.md | sed '$d' > releases/v${{ steps.get_version.outputs.VERSION }}/RELEASE_NOTES.md || echo "## Release v${{ steps.get_version.outputs.VERSION }}" > releases/v${{ steps.get_version.outputs.VERSION }}/RELEASE_NOTES.md
+        fi
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          releases/v${{ steps.get_version.outputs.VERSION }}/firmware_v${{ steps.get_version.outputs.VERSION }}.bin
+        body_path: releases/v${{ steps.get_version.outputs.VERSION }}/RELEASE_NOTES.md
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
