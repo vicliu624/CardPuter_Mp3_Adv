@@ -72,15 +72,59 @@ $configContent = $configContent -replace '#define FIRMWARE_VERSION_STRING ".*"',
 $configContent | Out-File -FilePath $configPath -Encoding utf8 -NoNewline
 git add $configPath
 
-# Build firmware
-Write-ColorOutput Green "Building firmware..."
-pio run -e m5stack-cardputer
+# Find PlatformIO executable
+$pioCmd = $null
+$possiblePaths = @(
+    "pio",
+    "platformio",
+    "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe",
+    "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe",
+    "$env:LOCALAPPDATA\Programs\PlatformIO\penv\Scripts\pio.exe"
+)
 
-# Check if build was successful
+foreach ($path in $possiblePaths) {
+    if ($path -eq "pio" -or $path -eq "platformio") {
+        # Try to find in PATH
+        $found = Get-Command $path -ErrorAction SilentlyContinue
+        if ($found) {
+            $pioCmd = $path
+            break
+        }
+    } else {
+        # Try absolute path
+        if (Test-Path $path) {
+            $pioCmd = $path
+            break
+        }
+    }
+}
+
+# Check if firmware already exists
 $firmwarePath = ".pio\build\m5stack-cardputer\firmware.bin"
-if (-not (Test-Path $firmwarePath)) {
-    Write-ColorOutput Red "Error: Firmware build failed"
-    exit 1
+$firmwareExists = Test-Path $firmwarePath
+
+if (-not $firmwareExists) {
+    if (-not $pioCmd) {
+        Write-ColorOutput Red "Error: PlatformIO not found and firmware doesn't exist."
+        Write-ColorOutput Yellow "Please either:"
+        Write-Output "  1. Install PlatformIO and add it to PATH, or"
+        Write-Output "  2. Build firmware manually: pio run -e m5stack-cardputer"
+        Write-Output "  3. Then run this script again"
+        exit 1
+    }
+    
+    # Build firmware
+    Write-ColorOutput Green "Building firmware using: $pioCmd"
+    & $pioCmd run -e m5stack-cardputer
+    
+    # Check if build was successful
+    if (-not (Test-Path $firmwarePath)) {
+        Write-ColorOutput Red "Error: Firmware build failed"
+        exit 1
+    }
+} else {
+    Write-ColorOutput Yellow "Firmware already exists, skipping build..."
+    Write-Output "   Using: $firmwarePath"
 }
 
 # Create release directory
