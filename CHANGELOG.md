@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2025-01-17
+
+### Added
+- Enhanced ID3 information page with playback controls:
+  - Current playback time display (MM:SS format, smaller font, centered in right area)
+  - Minimalist progress bar (1-pixel high, green, at bottom of screen)
+  - Control icons (Previous: |◀, Play/Pause: ▶/⏸, Next: ▶|) with rounded square backgrounds
+  - Control icons positioned at bottom right, 4 pixels above progress bar
+  - ContentType metadata display (below title, only if exists)
+- Screenshots section in README.md with main view and ID3 page examples
+
+### Enhanced
+- ID3 page layout improvements:
+  - Dynamic positioning for Artist, Title, and ContentType to prevent overlap
+  - Artist name aligned with cover top edge
+  - Title and ContentType positioned dynamically based on previous element
+  - Album name scrolling with proper clipRect to show full text height
+- Control icons design:
+  - Rounded square backgrounds (19x19 pixels) with gray color
+  - Icons drawn using drawing primitives for flexibility
+  - Properly centered and spaced icons
+  - Play/Pause icon toggles based on playback state
+
+### Fixed
+- Screenshot color conversion issue (removed redundant byte swap causing incorrect colors)
+- Album name text clipping when scrolling (adjusted clipRect to include full font height)
+- Text overlap issues on ID3 page (dynamic Y position calculation)
+- Scroll trigger logic (only scrolls when text width exceeds available width)
+
 ## [2.1.0] - 2025-11-11
 
 ### Added

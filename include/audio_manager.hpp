@@ -44,6 +44,12 @@ uint32_t getSampleRate();
 // Get current bits per sample
 uint8_t getBitsPerSample();
 
+// Get current playback time in seconds
+uint32_t getCurrentTime();
+
+// Get total file duration in seconds
+uint32_t getFileDuration();
+
 // ID3 metadata callback (called by ESP32-audioI2S library)
 void onID3Data(const char* info, AppState& appState);
 

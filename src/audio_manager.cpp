@@ -73,6 +73,16 @@ uint8_t getBitsPerSample() {
   return g_audio->getBitsPerSample();
 }
 
+uint32_t getCurrentTime() {
+  if (!g_audio) return 0;
+  return g_audio->getAudioCurrentTime();
+}
+
+uint32_t getFileDuration() {
+  if (!g_audio) return 0;
+  return g_audio->getAudioFileDuration();
+}
+
 void onID3Data(const char* info, AppState& appState) {
   if (!info) return;
   String s(info);
@@ -113,12 +123,14 @@ void onID3Data(const char* info, AppState& appState) {
   matched |= assignKV("Artist", appState.id3Artist);
   matched |= assignKV("Album",  appState.id3Album);
   matched |= assignKV("Year",   appState.id3Year);
+  matched |= assignKV("ContentType", appState.id3ContentType);
 
   matched |= assignFrame("TIT2", appState.id3Title);
   matched |= assignFrame("TALB", appState.id3Album);
   matched |= assignFrame("TPE1", appState.id3Artist);
   matched |= assignFrame("TYER", appState.id3Year);
   matched |= assignFrame("TDRC", appState.id3Year);
+  matched |= assignFrame("TCON", appState.id3ContentType);
 
   // Ignore non-metadata lines (e.g., "SettingsForEncoding: Lavf58.76.100")
   if (!matched && (s.indexOf(":") >= 0 || s.indexOf("=") >= 0)) {

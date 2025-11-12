@@ -47,6 +47,7 @@ struct AppState {
   String id3Artist = "";
   String id3Album = "";
   String id3Year = "";
+  String id3ContentType = "";
   
   // ID3 cover (streaming)
   size_t id3CoverPos = 0;
@@ -76,6 +77,7 @@ struct AppState {
     id3Artist = "";
     id3Album = "";
     id3Year = "";
+    id3ContentType = "";
     id3CoverPos = 0;
     id3CoverLen = 0;
     if (id3CoverBuf) {

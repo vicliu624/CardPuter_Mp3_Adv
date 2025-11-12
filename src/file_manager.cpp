@@ -218,19 +218,18 @@ void captureScreenshot(fs::FS& fs, M5Canvas& sprite, ESP32Time& rtc) {
     int bufIdx = 0;
     for (int x = 0; x < SCREEN_WIDTH; x++) {
       // Read pixel from sprite (RGB565)
+      // readPixel already returns standard RGB565 format (byte-swapped internally)
       uint16_t pixel = sprite.readPixel(x, y);
-      // Convert RGB565 to BGR888 (BMP uses BGR)
-      // First byte-swap to get standard RGB565
-      pixel = ((pixel & 0xFF) << 8) | ((pixel >> 8) & 0xFF);
-      // Extract R, G, B (5-6-5 bits)
+      // Extract R, G, B from RGB565 (5-6-5 bits)
+      // RGB565 format: RRRRR GGGGGG BBBBB (bits 15-11, 10-5, 4-0)
       uint8_t r5 = (pixel >> 11) & 0x1F;
       uint8_t g6 = (pixel >> 5) & 0x3F;
       uint8_t b5 = pixel & 0x1F;
-      // Expand to 8 bits
+      // Expand to 8 bits (scale 5-bit to 8-bit, 6-bit to 8-bit)
       uint8_t r = (r5 << 3) | (r5 >> 2);
       uint8_t g = (g6 << 2) | (g6 >> 4);
       uint8_t b = (b5 << 3) | (b5 >> 2);
-      // Write as BGR (BMP format)
+      // Write as BGR (BMP format uses BGR byte order)
       rowBuffer[bufIdx++] = b;
       rowBuffer[bufIdx++] = g;
       rowBuffer[bufIdx++] = r;

@@ -148,27 +148,36 @@ void drawId3Page(M5Canvas& sprite,
     sprite.setTextDatum(0);
   }
 
-  const int albumY = ALBUM_TEXT_Y;
-  const int albumH = ALBUM_TEXT_HEIGHT;
-  (void)albumH;
-  sprite.fillRect(coverX, albumY, coverW, albumH, BLACK);
-  sprite.setTextColor(WHITE, BLACK);
+  // Album text: ensure it's below cover and handle scrolling properly
   const lgfx::U8g2font* albumFont = detectAndGetFont(appState.id3Album);
   if (albumFont) sprite.setFont(albumFont); else sprite.setTextFont(0);
+  int32_t albumFontH = sprite.fontHeight();
+  // albumY is baseline, text extends from (albumY - fontHeight) to (albumY + descender)
+  const int albumY = ALBUM_TEXT_Y;
+  const int albumH = ALBUM_TEXT_HEIGHT;
+  // Clip rect should include full text height: from top of text to bottom (with descenders)
+  const int clipY = albumY - albumFontH;
+  const int clipH = albumFontH * 2;  // Full height: fontHeight above baseline + fontHeight for descenders
+  
+  sprite.fillRect(coverX, clipY, coverW, clipH, BLACK);
+  sprite.setTextColor(WHITE, BLACK);
   int16_t tw = sprite.textWidth(appState.id3Album);
   int clipW = coverW;
-  if (tw <= clipW) {
-    String albumDraw = appState.id3Album.length() ? appState.id3Album : String(PLACEHOLDER_UNKNOWN_ALBUM);
-    sprite.drawString(albumDraw, coverX, albumY);
-  } else {
+  // Only scroll if text width is greater than available width
+  if (tw > clipW) {
     if (appState.id3AlbumSelectTime == 0) appState.id3AlbumSelectTime = millis();
     if (millis() - appState.id3AlbumSelectTime >= ID3_SCROLL_DELAY && appState.graphSpeed == 0) {
       appState.id3AlbumScrollPos -= SCROLL_STEP;
       if (appState.id3AlbumScrollPos + tw < 0) appState.id3AlbumScrollPos = clipW;
     }
-    sprite.setClipRect(coverX, albumY, coverW, albumH);
+    sprite.setClipRect(coverX, clipY, clipW, clipH);
     sprite.drawString(appState.id3Album, coverX + appState.id3AlbumScrollPos, albumY);
     sprite.clearClipRect();
+  } else {
+    // Reset scroll position when text fits
+    appState.id3AlbumScrollPos = 0;
+    String albumDraw = appState.id3Album.length() ? appState.id3Album : String(PLACEHOLDER_UNKNOWN_ALBUM);
+    sprite.drawString(albumDraw, coverX, albumY);
   }
 
   sprite.setTextFont(0);
@@ -176,13 +185,126 @@ void drawId3Page(M5Canvas& sprite,
   if (artistFont) sprite.setFont(artistFont); else sprite.setTextFont(0);
   sprite.setTextColor(WHITE, BLACK);
   {
+    // Calculate artist Y position to align text top with cover top
+    // drawString Y coordinate is baseline, so we need to add font height to align top
+    int32_t fontH = sprite.fontHeight();
+    int artistY = COVER_Y + fontH;  // Align text top with cover top
     String artistDraw = appState.id3Artist.length() ? appState.id3Artist : String(PLACEHOLDER_UNKNOWN_ARTIST);
-    sprite.drawString(artistDraw, ARTIST_X, ARTIST_Y);
+    sprite.drawString(artistDraw, ARTIST_X, artistY);
+    
+    // Calculate title Y position: below artist with spacing
+    int titleY = artistY + fontH + 2;  // 2px spacing below artist
+    // Display Title if available
+    if (appState.id3Title.length() > 0) {
+      const lgfx::U8g2font* titleFont = detectAndGetFont(appState.id3Title);
+      if (titleFont) sprite.setFont(titleFont); else sprite.setTextFont(0);
+      sprite.setTextColor(grays[2], BLACK);
+      sprite.drawString(appState.id3Title, TITLE_X, titleY);
+      
+      // Calculate ContentType Y position: below title with spacing
+      int32_t titleFontH = sprite.fontHeight();
+      int contentTypeY = titleY + titleFontH + 2;  // 2px spacing below title
+      // Display ContentType if available (below title)
+      if (appState.id3ContentType.length() > 0) {
+        sprite.setTextFont(0);  // Use default font for ContentType
+        sprite.setTextColor(grays[8], BLACK);  // Use lighter gray for ContentType
+        sprite.drawString(appState.id3ContentType, CONTENT_TYPE_X, contentTypeY);
+      }
+    } else {
+      // No title, ContentType goes directly below artist
+      int contentTypeY = artistY + fontH + 2;  // 2px spacing below artist
+      if (appState.id3ContentType.length() > 0) {
+        sprite.setTextFont(0);  // Use default font for ContentType
+        sprite.setTextColor(grays[8], BLACK);  // Use lighter gray for ContentType
+        sprite.drawString(appState.id3ContentType, CONTENT_TYPE_X, contentTypeY);
+      }
+    }
   }
-  const lgfx::U8g2font* titleFont = detectAndGetFont(appState.id3Title);
-  if (titleFont) sprite.setFont(titleFont); else sprite.setTextFont(0);
-  sprite.setTextColor(grays[2], BLACK);
-  sprite.drawString(appState.id3Title, TITLE_X, TITLE_Y);
+  
+  // Display current playback time (smaller font, centered in right area, above icons)
+  if (appState.isPlaying && !appState.stopped) {
+    uint32_t currentTime = AudioManager::getCurrentTime();
+    uint32_t minutes = currentTime / 60;
+    uint32_t seconds = currentTime % 60;
+    char timeStr[6];
+    snprintf(timeStr, sizeof(timeStr), "%02lu:%02lu", (unsigned long)minutes, (unsigned long)seconds);
+    
+    sprite.setTextFont(0);  // Use default font (smaller than DSEG7)
+    sprite.setTextColor(GREEN, BLACK);
+    sprite.setTextDatum(4);  // Center alignment
+    // Center of right area: 120 + (240-120)/2 = 180
+    sprite.drawString(timeStr, 180, ID3_TIME_Y);
+  }
+  
+  // Draw control icons (◀◀, ▶/⏸, ▶▶) - rounded square backgrounds with icons inside
+  sprite.setTextFont(0);
+  uint16_t iconBgColor = grays[4];  // Background color for icon squares
+  uint16_t iconColor = grays[8];  // Icon color
+  
+  // Previous icon (▶|) - rounded square: right-pointing triangle on LEFT, vertical line on RIGHT
+  sprite.fillRoundRect(ID3_ICON_PREV_X, ID3_ICONS_Y, ID3_ICON_SIZE, ID3_ICON_SIZE, ID3_ICON_ROUND_RADIUS, iconBgColor);
+  int prevCenterX = ID3_ICON_PREV_X + ID3_ICON_SIZE / 2;  // Center of 19px square: 144 + 9.5 = 153.5
+  int prevCenterY = ID3_ICONS_Y + ID3_ICON_SIZE / 2;
+  // Right-pointing triangle on the LEFT side (tip points right, centered vertically)
+  int prevTriangleSize = 6;
+  int prevTriangleTipX = prevCenterX - 3;  // 3px left of center, tip of triangle
+  sprite.fillTriangle(prevTriangleTipX, prevCenterY,
+                      prevTriangleTipX + prevTriangleSize, prevCenterY - prevTriangleSize/2,
+                      prevTriangleTipX + prevTriangleSize, prevCenterY + prevTriangleSize/2, iconColor);
+  // Vertical line on the RIGHT side (2px wide, 10px tall, centered vertically) - moved 10px left from original position
+  int prevLineX = prevCenterX - 5;  // 5px left of center (moved 10px left from original prevCenterX + 5)
+  int prevLineHeight = 10;
+  sprite.fillRect(prevLineX, prevCenterY - prevLineHeight/2, 2, prevLineHeight, iconColor);
+  
+  // Play/Pause icon (▶ or ⏸) - rounded square
+  sprite.fillRoundRect(ID3_ICON_PLAY_X, ID3_ICONS_Y, ID3_ICON_SIZE, ID3_ICON_SIZE, ID3_ICON_ROUND_RADIUS, iconBgColor);
+  int playCenterX = ID3_ICON_PLAY_X + ID3_ICON_SIZE / 2;
+  int playCenterY = ID3_ICONS_Y + ID3_ICON_SIZE / 2;
+  if (appState.isPlaying && !appState.stopped) {
+    // Pause icon (⏸) - two rounded rectangles
+    int pauseBarWidth = 3;
+    int pauseBarHeight = 10;
+    int pauseBarGap = 2;
+    sprite.fillRoundRect(playCenterX - pauseBarWidth - pauseBarGap/2, playCenterY - pauseBarHeight/2, 
+                         pauseBarWidth, pauseBarHeight, 1, iconColor);
+    sprite.fillRoundRect(playCenterX + pauseBarGap/2, playCenterY - pauseBarHeight/2, 
+                         pauseBarWidth, pauseBarHeight, 1, iconColor);
+  } else {
+    // Play icon (▶) - filled triangle
+    int playTriangleSize = 8;
+    sprite.fillTriangle(playCenterX - playTriangleSize/2, playCenterY - playTriangleSize/2,
+                        playCenterX - playTriangleSize/2, playCenterY + playTriangleSize/2,
+                        playCenterX + playTriangleSize/2, playCenterY, iconColor);
+  }
+  
+  // Next icon (|◀) - rounded square: vertical line on LEFT, left-pointing triangle on RIGHT
+  sprite.fillRoundRect(ID3_ICON_NEXT_X, ID3_ICONS_Y, ID3_ICON_SIZE, ID3_ICON_SIZE, ID3_ICON_ROUND_RADIUS, iconBgColor);
+  int nextCenterX = ID3_ICON_NEXT_X + ID3_ICON_SIZE / 2;  // Center of 19px square: 198 + 9.5 = 207.5
+  int nextCenterY = ID3_ICONS_Y + ID3_ICON_SIZE / 2;
+  // Vertical line on the LEFT side (2px wide, 10px tall, centered vertically) - moved 10px right
+  int nextLineX = nextCenterX - 5 + 10;  // Was 5px left of center, now 5px right of center (moved 10px right)
+  int nextLineHeight = 10;
+  sprite.fillRect(nextLineX, nextCenterY - nextLineHeight/2, 2, nextLineHeight, iconColor);
+  // Left-pointing triangle on the RIGHT side (tip points left, centered vertically)
+  int nextTriangleSize = 6;
+  int nextTriangleTipX = nextCenterX + 3;  // 3px right of center, tip of triangle
+  sprite.fillTriangle(nextTriangleTipX, nextCenterY,
+                      nextTriangleTipX - nextTriangleSize, nextCenterY - nextTriangleSize/2,
+                      nextTriangleTipX - nextTriangleSize, nextCenterY + nextTriangleSize/2, iconColor);
+  
+  // Draw progress bar at bottom of screen
+  if (appState.isPlaying && !appState.stopped) {
+    uint32_t currentTime = AudioManager::getCurrentTime();
+    uint32_t duration = AudioManager::getFileDuration();
+    if (duration > 0) {
+      int progressWidth = (int)((float)currentTime / (float)duration * SCREEN_WIDTH);
+      if (progressWidth > SCREEN_WIDTH) progressWidth = SCREEN_WIDTH;
+      if (progressWidth > 0) {
+        sprite.fillRect(0, PROGRESS_BAR_Y, progressWidth, PROGRESS_BAR_HEIGHT, GREEN);
+      }
+    }
+  }
+  
   sprite.pushSprite(0, 0);
 }
 
