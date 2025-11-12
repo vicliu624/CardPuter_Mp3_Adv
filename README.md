@@ -2,6 +2,14 @@
 
 An advanced MP3 player based on M5Cardputer, featuring Chinese character display, multiple playback modes, and rich control functions.
 
+## Screenshots
+
+### Main View
+![Main View](docs/images/screenshot_20210117_000004.png)
+
+### ID3 Information Page
+![ID3 Information Page](docs/images/screenshot_20210117_000112.png)
+
 ## Features
 
 ### Audio Playback
@@ -178,12 +186,13 @@ Use PlatformIO to compile and flash.
 
 For detailed changelog, please see [CHANGELOG.md](CHANGELOG.md).
 
-**Current Version**: 2.1.0
+**Current Version**: 2.2.0
 
 **Recent Highlights**:
-- Major code structure refactoring and modularization
-- Improved performance and memory management
-- Enhanced code maintainability
+- Enhanced ID3 information page with playback controls and progress bar
+- Improved UI layout with dynamic text positioning
+- Fixed screenshot color conversion issue
+- Added interface screenshots to documentation
 
 **Previous Major Versions**:
 - **v2.0.0**: Multi-language support, playback modes, ID3 display, screenshot feature

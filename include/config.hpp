@@ -7,9 +7,9 @@
 
 // Version information
 #define FIRMWARE_VERSION_MAJOR 2
-#define FIRMWARE_VERSION_MINOR 1
+#define FIRMWARE_VERSION_MINOR 2
 #define FIRMWARE_VERSION_PATCH 0
-#define FIRMWARE_VERSION_STRING "2.1.0"
+#define FIRMWARE_VERSION_STRING "2.2.0"
 
 // Screen dimensions
 constexpr int SCREEN_WIDTH = 240;
@@ -49,12 +49,35 @@ constexpr int COVER_X = 8;
 constexpr int COVER_Y = 8;
 constexpr int COVER_WIDTH = 96;
 constexpr int COVER_HEIGHT = 96;
-constexpr int ALBUM_TEXT_Y = COVER_Y + COVER_HEIGHT + 2;
+// Album text Y position: ensure it's below the cover with enough space for font height
+// COVER_Y + COVER_HEIGHT = 8 + 96 = 104 (bottom of cover)
+// Add spacing (2px) + font height (16px) to ensure text baseline is below cover
+constexpr int ALBUM_TEXT_Y = COVER_Y + COVER_HEIGHT + 2 + 16;  // 106 + 16 = 122
 constexpr int ALBUM_TEXT_HEIGHT = 16;
 constexpr int ARTIST_X = 120;
-constexpr int ARTIST_Y = 8;
+// Artist Y position: align text top with cover top
+// COVER_Y = 8, font height typically 16px, so baseline should be at COVER_Y + font_height
+constexpr int ARTIST_Y = COVER_Y + 16;  // 8 + 16 = 24 (text top aligns with cover top at Y=8)
 constexpr int TITLE_X = 120;
 constexpr int TITLE_Y = 26;
+constexpr int CONTENT_TYPE_X = 120;
+constexpr int CONTENT_TYPE_Y = 42;
+constexpr int ID3_ICON_SIZE = 19;  // Font size (16) + 3 pixels
+constexpr int ID3_ICON_GAP = 8;  // Space between icons
+constexpr int ID3_ICON_ROUND_RADIUS = 3;  // Round corner radius for icons
+constexpr int PROGRESS_BAR_Y = SCREEN_HEIGHT - 1;  // Bottom of screen
+constexpr int PROGRESS_BAR_HEIGHT = 1;
+constexpr int ID3_ICONS_Y = PROGRESS_BAR_Y - PROGRESS_BAR_HEIGHT - 4 - ID3_ICON_SIZE;  // 4 pixels above progress bar
+constexpr int ID3_TIME_FONT_HEIGHT = 8;  // Default font height (smaller than DSEG7)
+constexpr int ID3_TIME_Y = ID3_ICONS_Y - 2 - ID3_TIME_FONT_HEIGHT;  // 2 pixels above icons
+// Time position: centered in right area (120-240, width=120)
+// Time string "MM:SS" width ~40px with default font, centered: X = 120 + (120-40)/2 = 200
+constexpr int ID3_TIME_X = 200;  // Centered in right area
+// Calculate icon positions: centered in right area (120-240, width=120)
+// Three icons: 19*3 + 8*2 = 73 pixels total, centered: start at 120 + (120-73)/2 = 144
+constexpr int ID3_ICON_PREV_X = 144;
+constexpr int ID3_ICON_PLAY_X = ID3_ICON_PREV_X + ID3_ICON_SIZE + ID3_ICON_GAP;  // 171
+constexpr int ID3_ICON_NEXT_X = ID3_ICON_PLAY_X + ID3_ICON_SIZE + ID3_ICON_GAP;  // 198
 
 // Playback mode display
 constexpr int MODE_X = 150;
