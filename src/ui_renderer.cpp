@@ -36,10 +36,30 @@ void drawId3Page(M5Canvas& sprite,
   if (appState.id3CoverBuf && appState.id3CoverSize > 0) {
     bool isJpeg = (appState.id3CoverSize >= 2 && appState.id3CoverBuf[0] == 0xFF && appState.id3CoverBuf[1] == 0xD8);
     bool isPng  = (appState.id3CoverSize >= 8 && appState.id3CoverBuf[0] == 0x89 && appState.id3CoverBuf[1] == 0x50 && appState.id3CoverBuf[2] == 0x4E && appState.id3CoverBuf[3] == 0x47);
-    if (isJpeg) {
-      sprite.drawJpg(appState.id3CoverBuf, appState.id3CoverSize, coverX, coverY, coverW, coverH);
-    } else if (isPng) {
-      sprite.drawPng(appState.id3CoverBuf, appState.id3CoverSize, coverX, coverY, coverW, coverH);
+    
+    if (isJpeg || isPng) {
+      // Get image dimensions and calculate proper scale
+      ImageFormat fmt = isJpeg ? ImageFormat::JPEG : ImageFormat::PNG;
+      uint32_t imgW = 0, imgH = 0;
+      float scaleX = 1.0f;
+      float scaleY = 0.0f;  // 0.0 means follow scaleX (maintain aspect ratio)
+      
+      if (getImageSizeFromBuffer(appState.id3CoverBuf, appState.id3CoverSize, fmt, imgW, imgH) && imgW > 0 && imgH > 0) {
+        float sx = (float)coverW / (float)imgW;
+        float sy = (float)coverH / (float)imgH;
+        scaleX = sx < sy ? sx : sy;  // Use smaller scale to fit both dimensions
+        if (scaleX <= 0.0f || scaleX > 1.0f) scaleX = 1.0f;
+      } else {
+        // If we can't get dimensions, use fit-to-size mode (scale = 0 means fit)
+        scaleX = 0.0f;
+      }
+      
+      // M5GFX drawJpg/drawPng from buffer support scale parameters directly!
+      if (isJpeg) {
+        sprite.drawJpg(appState.id3CoverBuf, appState.id3CoverSize, coverX, coverY, coverW, coverH, 0, 0, scaleX, scaleY);
+      } else {
+        sprite.drawPng(appState.id3CoverBuf, appState.id3CoverSize, coverX, coverY, coverW, coverH, 0, 0, scaleX, scaleY);
+      }
     } else {
       sprite.fillRect(coverX, coverY, coverW, coverH, grays[4]);
       sprite.drawRect(coverX, coverY, coverW, coverH, grays[10]);
@@ -57,26 +77,30 @@ void drawId3Page(M5Canvas& sprite,
         ImageFormat fmt = ImageFormat::Unknown;
         findImageStart(f, scanMax, startOff, fmt);
         uint32_t imgW = 0, imgH = 0;
-        getImageSize(f, appState.id3CoverPos + startOff, fmt, imgW, imgH);
+        bool gotSize = getImageSize(f, appState.id3CoverPos + startOff, fmt, imgW, imgH);
         f.seek(appState.id3CoverPos + startOff);
         if (fmt != ImageFormat::Unknown) {
-          float scale = 1.0f;
-          if (imgW > 0 && imgH > 0) {
-            float sx2 = (float)coverW / (float)imgW;
-            float sy2 = (float)coverH / (float)imgH;
-            scale = sx2 < sy2 ? sx2 : sy2;
-            if (scale <= 0.0f || scale > 1.0f) scale = 1.0f;
+          float scaleX = 1.0f;
+          float scaleY = 0.0f;  // 0.0 means follow scaleX (maintain aspect ratio)
+          
+          if (gotSize && imgW > 0 && imgH > 0) {
+            float sx = (float)coverW / (float)imgW;
+            float sy = (float)coverH / (float)imgH;
+            scaleX = sx < sy ? sx : sy;  // Use smaller scale to fit both dimensions
+            if (scaleX <= 0.0f || scaleX > 1.0f) scaleX = 1.0f;
           } else {
-            scale = 0.5f;
+            // If we can't get dimensions, use fit-to-size mode (scale = 0 means fit)
+            scaleX = 0.0f;
           }
+          
           if (fmt == ImageFormat::JPEG) {
-            sprite.drawJpg(&f, coverX, coverY, coverW, coverH, 0, 0, scale, 0.0f);
+            sprite.drawJpg(&f, coverX, coverY, coverW, coverH, 0, 0, scaleX, scaleY);
           } else if (fmt == ImageFormat::PNG) {
-            sprite.drawPng(&f, coverX, coverY, coverW, coverH, 0, 0, scale, 0.0f);
+            sprite.drawPng(&f, coverX, coverY, coverW, coverH, 0, 0, scaleX, scaleY);
           } else if (fmt == ImageFormat::BMP) {
-            sprite.drawBmp(&f, coverX, coverY, coverW, coverH, 0, 0, scale, 0.0f);
+            sprite.drawBmp(&f, coverX, coverY, coverW, coverH, 0, 0, scaleX, scaleY);
           } else if (fmt == ImageFormat::QOI) {
-            sprite.drawQoi(&f, coverX, coverY, coverW, coverH, 0, 0, scale, 0.0f);
+            sprite.drawQoi(&f, coverX, coverY, coverW, coverH, 0, 0, scaleX, scaleY);
           }
         } else {
           sprite.fillRect(coverX, coverY, coverW, coverH, grays[4]);

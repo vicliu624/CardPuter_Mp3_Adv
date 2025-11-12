@@ -2,6 +2,7 @@
 .pio/
 .vscode/
 .idea/
+.history/
 
 # Build artifacts
 *.bin

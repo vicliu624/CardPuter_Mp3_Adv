@@ -21,4 +21,8 @@ bool findImageStart(fs::File& f, size_t maxToScan, size_t& startOff, ImageFormat
 // On success returns true and sets outW/outH (best-effort).
 bool getImageSize(fs::File& f, size_t dataPos, ImageFormat format, uint32_t& outW, uint32_t& outH);
 
+// Read dimensions for the given format from memory buffer.
+// On success returns true and sets outW/outH (best-effort).
+bool getImageSizeFromBuffer(const uint8_t* buf, size_t bufSize, ImageFormat format, uint32_t& outW, uint32_t& outH);
+
 
